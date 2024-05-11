@@ -38,9 +38,16 @@ class Trajectories(Dataset):
         self.text_condition = text_condition
 
         self.trajectories = self.init_npy(now_path, 0)
+
         self.uids = self.init_npy(now_path.replace("data.npy", "uid.npy"), 1)
         if self.text_condition == 1:
             self.strs = self.init_npy(now_path.replace("data.npy", "str.npy"), 2)
+            '''
+            for str in self.strs:
+                if len(str) > 0:
+                    print(str)
+            exit(0)
+            '''
 
         self.seq_len = seq_len
         self.size = len(self.trajectories)
@@ -62,7 +69,10 @@ class Trajectories(Dataset):
                 flag = 1
                 now_traj = []
                 for gps in traj:
-                    gps = to_gps(gps)
+                    if "Beijing" in data_path:
+                        pass
+                    else:
+                        gps = to_gps(gps)
                     if not judge_legal(gps):
                         flag = 0
                         break

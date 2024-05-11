@@ -13,14 +13,6 @@ import math
 
 from model.t5 import t5_encode_text, get_encoded_dim, DEFAULT_T5_NAME
 
-
-# tRAJ ： Q: L0 * D
-# text ： KV: L' * D
-# Q KV
-# (Q*K^T)*V
-# (L0*L‘) L’D
-# L0*D
-
 class Attention(nn.Module):
     def __init__(self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.):
         super().__init__()
@@ -45,8 +37,6 @@ class Attention(nn.Module):
         #     print(context.shape)
 
         q = self.q(x).reshape(B, N, 1, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)[0]
-
-        # print(context.shape,x.shape)
 
         if context is not None:
             # print(context.shape)
@@ -141,7 +131,7 @@ class LabelSmoothingCrossEntropy(nn.Module):
     def __init__(self, smoothing=0.1):
         super(LabelSmoothingCrossEntropy, self).__init__()
         assert smoothing < 1.0
-        self.codebook_size = 4900
+        self.codebook_size = 1020
         self.smoothing = smoothing
         self.confidence = 1. - smoothing
         self.loss_weight = self.gen_loss_weight()  # C X C
@@ -223,7 +213,7 @@ class MaskedGenerativeEncoderViT(nn.Module):
     """ Masked Autoencoder with VisionTransformer backbone
     """
 
-    def __init__(self, t5_name="files/LLM3", img_size=256, patch_size=16, in_chans=3,
+    def __init__(self, t5_name="files/LLM", img_size=256, patch_size=16, in_chans=3,
                  embed_dim=1024, depth=24, num_heads=16,
                  decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
                  mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False,
@@ -235,7 +225,7 @@ class MaskedGenerativeEncoderViT(nn.Module):
 
         self.text_condition = text_condition
 
-        self.codebook_size = 4900
+        self.codebook_size = 1020
         vocab_size = self.codebook_size + 1000 + 1  # 1024 codebook size, 1000 classes, 1 for mask token.
         self.fake_class_label = self.codebook_size + 1100 - 1024
         self.mask_token_label = vocab_size - 1
@@ -433,12 +423,7 @@ class MaskedGenerativeEncoderViT(nn.Module):
         return loss, loss_smooth, loss_pre, loss_nll
 
     def text_encoder(self, text):
-        # text : [L1,L2,L3]， [L4,L5,L6]
-        # 结构化数据
-        # tensor : N1*N2 *N3*\CDOTS
         text_embeds = self.encode_text(text).float()  # B * L * D
-        # B * max(L1,L2,L3) * D
-        # B * max(L4,L5,L6) * D
         context = self.text_embed_proj(text_embeds)
         return context
 
@@ -505,7 +490,7 @@ class MaskedGenerativeEncoderViT(nn.Module):
         torch.manual_seed(config.seed)
         np.random.seed(config.seed)
 
-        codebook_size = 4900
+        codebook_size = 1020
         mask_token_id = self.mask_token_label
         unknown_number_in_the_beginning = 96
         _CONFIDENCE_OF_KNOWN_TOKENS = +np.inf

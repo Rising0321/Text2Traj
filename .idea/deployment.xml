@@ -10,6 +10,13 @@
           </mappings>
         </serverdata>
       </paths>
+      <paths name="hz">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/work/zhangruixing/OpenUR" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="zhangrx@10.134.153.63:22 password">
         <serverdata>
           <mappings>

@@ -7,16 +7,18 @@ import os
 import math
 
 from files.trajectories import Trajectories
+from model.RAG import RAG
+from model.RandomRet import RandomRet
 from model.models_Textur import ur_vit_base_patch16
 from tqdm.auto import tqdm
 
-from utils.utils import calc_files, myprepare
+from utils.utils import calc_files, myprepare, build_testfile, calculate_metrices
 from utils.visualizations import visual
 
 from diffusers.optimization import get_cosine_schedule_with_warmup
 from accelerate import Accelerator
 import torch.nn as nn
-
+import random
 import pandas as pd
 
 
@@ -68,9 +70,15 @@ def init_accelerator(config):
             os.makedirs(f"./metrices/{config.model_name}", exist_ok=True)
         accelerator.init_trackers("train_example")
 
-    seed = args.seed  # + torch.distributed.get_rank()
+    seed = args.seed  + torch.distributed.get_rank()
     torch.manual_seed(seed)
     np.random.seed(seed)
+    random.seed(seed)
+
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     return accelerator
 
 
@@ -108,39 +116,26 @@ def train(train_files, config, accelerator, model, optimizer, lr_scheduler, devi
         global_step += 1
 
 
-def test(test_files, config, accelerator, model, epoch):
-    test_dataset = Trajectories(test_files, config.image_size, epoch, config.text_condition)
-    test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=config.eval_batch_size,
-                                                  shuffle=True)
-
+def test(test_file, test_reduced, config, accelerator, model, epoch):
+    test_dataloader = torch.utils.data.DataLoader(test_file, batch_size=config.eval_batch_size,
+                                                  shuffle=False)
     progress_bar = tqdm(total=len(test_dataloader), disable=not accelerator.is_local_main_process)
-    progress_bar.set_description(f"Epoch {epoch}")
 
-    model.eval()
+    res_trajs = []
+
     with torch.no_grad():
+        for step, clean_text in enumerate(test_dataloader):
+            with torch.autocast("cuda"):
+                res_traj = model.module.gen_trajs(config, clean_text).cpu().numpy()
 
-        for step, batch in enumerate(test_dataloader):
-            if config.text_condition == 0:
-                clean_text = None
-            else:
-                clean_text = list(batch[1])
+            res_trajs.extend(res_traj)
 
-            real_trajs = batch[2].cpu().numpy()
-
-            res_trajs = model.gen_trajs(config, clean_text).cpu().numpy()
-
-            if clean_text is not None:
-                res_texts = clean_text
-            else:
-                res_texts = None
-
-            break
-
-        visual(real_trajs, epoch, "real", config.eval_batch_size,
-               model_name=config.model_name, res_texts=res_texts)
+            progress_bar.update(1)
 
         visual(res_trajs, epoch, "test", config.eval_batch_size,
-               model_name=config.model_name, res_texts=res_texts)
+               model_name=config.model_name, res_texts=test_file)
+
+        calculate_metrices(test_reduced, res_trajs)
 
 
 def main(config):
@@ -148,12 +143,44 @@ def main(config):
 
     accelerator = init_accelerator(config)
 
+    if accelerator.is_local_main_process:
+        test_files, test_reduced = build_testfile(config.train_path)
+    else:
+        test_files = None
+        test_reduced = None
+
     if config.from_terminal is False:
         device = accelerator.device
     else:
         device = config.gpu
 
-    model, optimizer, lr_scheduler = build_model(config, accelerator)
+    if config.model == "ur_base":
+        model, optimizer, lr_scheduler = build_model(config, accelerator)
+    else:
+
+        if config.model == "rag":
+            with torch.autocast("cuda"):
+                model = RAG(train_files, config, accelerator, device)
+        elif config.model == "random":
+            with torch.autocast("cuda"):
+                model = RandomRet(train_files, config, accelerator, device)
+        else:
+            raise NotImplementedError()
+
+        test_dataloader = torch.utils.data.DataLoader(test_files, batch_size=config.eval_batch_size,
+                                                      shuffle=False)
+        res_trajs = []
+
+        for step, clean_text in enumerate(test_dataloader):
+            with torch.autocast("cuda"):
+                res = model.search(clean_text)
+            res_trajs.extend(res)
+
+        # visual(res_trajs, 0, "testRAG", config.eval_batch_size,
+        #       model_name=config.model_name, res_texts=test_files)
+
+        calculate_metrices(test_reduced, res_trajs)
+        return
 
     st_epoch = 1
     if config.load_path != "":
@@ -165,37 +192,42 @@ def main(config):
             print("loading models")
             accelerator.load_state(f"./logs/{config.model_name}/{config.load_path}.ckpt")
 
+        '''
+        if accelerator.is_local_main_process and epoch % config.test_model_epochs == 0:
+            test(test_files, test_reduced, config, accelerator, model, epoch)
+        '''
+
         train(train_files, config, accelerator, model, optimizer, lr_scheduler, device, epoch)
 
-        if epoch % config.save_model_epochs == 0:
+        if accelerator.is_local_main_process and epoch % config.save_model_epochs == 0:
             accelerator.save_state(output_dir=f"./logs/{config.model_name}/{epoch}.ckpt")
 
-        if epoch % config.test_model_epochs == 0:
-            test(train_files, config, accelerator, model, epoch)
+        if accelerator.is_local_main_process and epoch % config.test_model_epochs == 0:
+            test(test_files, test_reduced, config, accelerator, model, epoch)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--image_size", type=int, default=96)
-    parser.add_argument("--train_batch_size", type=int, default=350)
-    parser.add_argument("--eval_batch_size", type=int, default=1024)
+    parser.add_argument("--train_batch_size", type=int, default=256)
+    parser.add_argument("--eval_batch_size", type=int, default=1000)
     parser.add_argument("--num_epochs", type=int, default=50000)
     parser.add_argument("--gpu", type=str, default="cuda:2")
 
     parser.add_argument("--model", type=str, default="ur_base")
 
     parser.add_argument("--from_terminal", type=bool, default=False)
-    parser.add_argument("--model_name", type=str, default="FinalurD")
+    parser.add_argument("--model_name", type=str, default="Beijing")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
     parser.add_argument("--lr_warmup_steps", type=int, default=500)
     parser.add_argument("--save_model_epochs", type=int, default=100)
-    parser.add_argument("--test_model_epochs", type=int, default=100)
+    parser.add_argument("--test_model_epochs", type=int, default=500)
     parser.add_argument("--mixed_precision", type=str, default='fp16')
 
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--train_path", type=str, default="/home/zhangrx/OpenUR/files/testFiles")
+    parser.add_argument("--train_path", type=str, default="./files/Beijing/")
     parser.add_argument("--load_path", type=str, default="")
 
     parser.add_argument("--test", type=int, default=0)
@@ -203,7 +235,7 @@ if __name__ == "__main__":
     parser.add_argument("--text_condition", type=int, default=1)
 
     args = parser.parse_args()
-    # CUDA_VISIBLE_DEVICES="0,1,2,3,4,5" accelerate launch train_modelur.py
+    #  CUDA_VISIBLE_DEVICES="0,1" accelerate launch train_modelTextur.py
     main(args)
 
 '''

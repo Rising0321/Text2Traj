@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="40d159d4-1aae-4356-856c-c7a5308062e7" name="hz">
+        <fileTransfer accessType="SFTP" host="saas.zfai.iluvatar.com.cn" port="30817" sshConfigId="2853fa65-c4dc-4414-91ae-76f7b06931e6" sshConfig="root@saas.zfai.iluvatar.com.cn:30817 password">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>
